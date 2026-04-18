@@ -64,7 +64,6 @@ export interface Territory {
   gang_id?: string | null;
   is_custom?: boolean;
   territory_id?: string | null;
-  custom_territory_id?: string | null;
 }
 
 /**
@@ -72,12 +71,13 @@ export interface Territory {
  */
 export interface CampaignTerritory {
   id: string;                    // campaign_territory ID (unique instance)
-  template_id: string | null;    // territory_id or custom_territory_id
+  template_id: string | null;    // territory_id (null for custom territories)
   name: string;                  // territory_name
   gang_id?: string | null;
   created_at: string;
   ruined: boolean;
   default_gang_territory: boolean;
+  playing_card?: string | null;
   is_custom: boolean;
   owning_gangs: GangReference[];
 }

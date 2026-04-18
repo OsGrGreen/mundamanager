@@ -69,8 +69,8 @@ interface Member {
 interface Territory {
   id: string;
   territory_id: string | null;
-  custom_territory_id?: string | null;
   territory_name: string;
+  playing_card?: string | null;
   gang_id: string | null;
   created_at: string;
   ruined?: boolean;
@@ -94,9 +94,7 @@ interface AllTerritory {
   id: string;
   territory_name: string;
   campaign_type_id: string | null;
-  is_custom?: boolean;
   territory_id?: string | null;
-  custom_territory_id?: string | null;
 }
 
 
@@ -238,6 +236,7 @@ export default function CampaignPageContent({
     updates?: {
       ruined?: boolean;
       default_gang_territory?: boolean;
+      playing_card?: string | null;
     };
   }
 
@@ -744,7 +743,6 @@ export default function CampaignPageContent({
   
             {/* Campaign Territories Section */}
             <div className="mb-8">
-              <h2 className="text-xl md:text-2xl font-bold mb-4">Territories</h2>
               <CampaignTerritoryList
                 territories={campaignData.territories}
                 campaignId={campaignData.id}
@@ -767,18 +765,6 @@ export default function CampaignPageContent({
           {activeTab === 1 && (
             <div className="bg-card shadow-md rounded-lg p-4">
               <div>
-                <div className="flex justify-between items-start mb-4">
-                  <h2 className="text-xl md:text-2xl font-bold">Territories</h2>
-                  {safePermissions.canManageTerritories && (
-                    <Button
-                      className="bg-neutral-900 hover:bg-gray-800 text-white"
-                      onClick={handleAddTerritory}
-                    >
-                      Add
-                    </Button>
-                  )}
-                </div>
-                
                 {/* Display existing territories */}
                 <CampaignTerritoryList
                   territories={campaignData.territories}
@@ -790,6 +776,16 @@ export default function CampaignPageContent({
                     canDeleteTerritories: safePermissions.canDeleteTerritories,
                     canClaimTerritories: safePermissions.canClaimTerritories
                   }}
+                  sectionHeaderEnd={
+                    safePermissions.canManageTerritories ? (
+                      <Button
+                        className="bg-neutral-900 hover:bg-gray-800 text-white shrink-0"
+                        onClick={handleAddTerritory}
+                      >
+                        Add
+                      </Button>
+                    ) : undefined
+                  }
                   onTerritoryUpdate={(update) => {
                     if (!update) {
                       refreshData();

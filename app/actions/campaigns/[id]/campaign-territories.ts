@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from "@/utils/supabase/server";
-import { revalidateTag, revalidatePath } from "next/cache";
+import { revalidateTag } from "next/cache";
 import { CACHE_TAGS } from "@/utils/cache-tags";
 import { logTerritoryLost, logTerritoryClaimed } from "../../logs/gang-campaign-logs";
 import { getAuthenticatedUser } from '@/utils/auth';
@@ -19,10 +19,13 @@ export interface RemoveGangFromTerritoryParams {
 
 export interface AddTerritoryParams {
   campaignId: string;
-  territoryId?: string;
-  customTerritoryId?: string;
+  territoryId: string;
   territoryName: string;
-  isCustom?: boolean;
+}
+
+export interface CreateCustomCampaignTerritoryParams {
+  campaignId: string;
+  territoryName: string;
 }
 
 export interface RemoveTerritoryParams {
@@ -35,6 +38,10 @@ export interface UpdateTerritoryStatusParams {
   territoryId: string;
   ruined: boolean;
   default_gang_territory: boolean;
+  /** Stored on `campaign_territories.playing_card`; null clears the value */
+  playing_card: string | null;
+  /** Stored on `campaign_territories.description`; null clears the value */
+  description: string | null;
 }
 
 /**
@@ -48,7 +55,7 @@ export async function assignGangToTerritory(params: AssignGangToTerritoryParams)
     // Get current territory data to check if another gang is losing it
     const { data: currentTerritoryData, error: selectError } = await supabase
       .from('campaign_territories')
-      .select('gang_id, territory_name, custom_territory_id, campaign_id')
+      .select('gang_id, territory_name, territory_id, campaign_id')
       .eq('id', territoryId)
       .eq('campaign_id', campaignId)
       .single();
@@ -108,7 +115,7 @@ export async function assignGangToTerritory(params: AssignGangToTerritoryParams)
             gang_name: oldGangName,
             territory_name: currentTerritoryData.territory_name,
             campaign_name: campaignName,
-            is_custom: !!currentTerritoryData.custom_territory_id
+            is_custom: !currentTerritoryData.territory_id
           });
         }
         
@@ -119,7 +126,7 @@ export async function assignGangToTerritory(params: AssignGangToTerritoryParams)
             gang_name: newGangName,
             territory_name: currentTerritoryData.territory_name,
             campaign_name: campaignName,
-            is_custom: !!currentTerritoryData.custom_territory_id
+            is_custom: !currentTerritoryData.territory_id
           });
         }
       } catch (logError) {
@@ -135,12 +142,11 @@ export async function assignGangToTerritory(params: AssignGangToTerritoryParams)
     revalidateTag(`campaign-${campaignId}`);
 
     // Invalidate gang cache to update territory ownership display
-    // NOTE: No need to invalidate COMPOSITE_GANG_FIGHTERS_LIST - gang page uses campaign-territories tag
-    revalidatePath(`/gang/${gangId}`);
+    revalidateTag(CACHE_TAGS.COMPOSITE_GANG_CAMPAIGNS(gangId));
 
     // Also invalidate cache for the gang that lost the territory
     if (currentTerritoryData?.gang_id && currentTerritoryData.gang_id !== gangId) {
-      revalidatePath(`/gang/${currentTerritoryData.gang_id}`);
+      revalidateTag(CACHE_TAGS.COMPOSITE_GANG_CAMPAIGNS(currentTerritoryData.gang_id));
     }
 
     return { success: true };
@@ -164,7 +170,7 @@ export async function removeGangFromTerritory(params: RemoveGangFromTerritoryPar
     // Get the gang and territory info before removing it so we can log and invalidate cache
     const { data: territoryData, error: selectError } = await supabase
       .from('campaign_territories')
-      .select('gang_id, territory_name, custom_territory_id, campaign_id')
+      .select('gang_id, territory_name, territory_id, campaign_id')
       .eq('id', territoryId)
       .eq('campaign_id', campaignId)
       .single();
@@ -211,7 +217,7 @@ export async function removeGangFromTerritory(params: RemoveGangFromTerritoryPar
           gang_name: gangName,
           territory_name: territoryData.territory_name,
           campaign_name: campaignName,
-          is_custom: !!territoryData.custom_territory_id
+          is_custom: !territoryData.territory_id
         });
       } catch (logError) {
         console.error('Error logging territory loss:', logError);
@@ -227,8 +233,7 @@ export async function removeGangFromTerritory(params: RemoveGangFromTerritoryPar
     
     // Invalidate gang cache to update territory ownership display
     if (territoryData?.gang_id) {
-      // NOTE: No need to invalidate COMPOSITE_GANG_FIGHTERS_LIST - gang page uses campaign-territories tag
-      revalidatePath(`/gang/${territoryData.gang_id}`);
+      revalidateTag(CACHE_TAGS.COMPOSITE_GANG_CAMPAIGNS(territoryData.gang_id));
     }
 
     return { success: true };
@@ -247,42 +252,30 @@ export async function removeGangFromTerritory(params: RemoveGangFromTerritoryPar
 export async function addTerritoryToCampaign(params: AddTerritoryParams) {
   try {
     const supabase = await createClient();
-    const { campaignId, territoryId, customTerritoryId, territoryName, isCustom } = params;
+    const { campaignId, territoryId, territoryName } = params;
 
-    // Validate that exactly one of territoryId or customTerritoryId is provided
-    if (isCustom && !customTerritoryId) {
-      throw new Error('Custom territory ID is required for custom territories');
-    }
-    if (!isCustom && !territoryId) {
-      throw new Error('Territory ID is required for regular territories');
+    if (!territoryId) {
+      throw new Error('Territory ID is required');
     }
 
-    // For custom territories, verify ownership
-    if (isCustom && customTerritoryId) {
-      const user = await getAuthenticatedUser(supabase);
-
-      const { data: customTerritory, error: customError } = await supabase
-        .from('custom_territories')
-        .select('id, user_id')
-        .eq('id', customTerritoryId)
-        .eq('user_id', user.id)
-        .single();
-
-      if (customError || !customTerritory) {
-        throw new Error('Custom territory not found or access denied');
-      }
-    }
-
-    const insertData: any = {
+    const insertData: Record<string, unknown> = {
       campaign_id: campaignId,
+      territory_id: territoryId,
       territory_name: territoryName
     };
 
-    if (isCustom) {
-      insertData.custom_territory_id = customTerritoryId;
-    } else {
-      insertData.territory_id = territoryId;
+    const { data: templateTerritory, error: templateError } = await supabase
+      .from('territories')
+      .select('playing_card')
+      .eq('id', territoryId)
+      .maybeSingle();
+
+    if (templateError) {
+      console.error('Error fetching territory template for playing_card:', templateError);
     }
+    const rawCard = templateTerritory?.playing_card;
+    insertData.playing_card =
+      typeof rawCard === 'string' && rawCard.trim() ? rawCard.trim() : null;
 
     const { error } = await supabase
       .from('campaign_territories')
@@ -290,10 +283,7 @@ export async function addTerritoryToCampaign(params: AddTerritoryParams) {
 
     if (error) throw error;
 
-    // 🎯 TARGETED CACHE INVALIDATION
-    // Invalidate only the affected campaign's territories
     revalidateTag(`campaign-territories-${campaignId}`);
-    // Also invalidate the general campaign cache for this specific campaign
     revalidateTag(`campaign-${campaignId}`);
 
     return { success: true };
@@ -302,6 +292,72 @@ export async function addTerritoryToCampaign(params: AddTerritoryParams) {
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to add territory to campaign' 
+    };
+  }
+}
+
+/**
+ * Create a custom territory directly in a campaign (no predefined template).
+ * Only campaign owners, arbitrators, and system admins may call this.
+ */
+export async function createCustomCampaignTerritory(params: CreateCustomCampaignTerritoryParams) {
+  try {
+    const supabase = await createClient();
+    const { campaignId, territoryName } = params;
+
+    const trimmedName = territoryName.trim();
+    if (!trimmedName) {
+      return { success: false, error: 'Territory name is required' };
+    }
+
+    const user = await getAuthenticatedUser(supabase);
+
+    // Permission check: admin, owner, or arbitrator
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('user_role')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profile?.user_role !== 'admin') {
+      const { data: members, error: memberError } = await supabase
+        .from('campaign_members')
+        .select('role')
+        .eq('campaign_id', campaignId)
+        .eq('user_id', user.id);
+
+      if (memberError || !members || members.length === 0) {
+        return { success: false, error: 'Only campaign owners and arbitrators can create custom territories' };
+      }
+
+      const hasPermission = members.some(
+        (m: { role: string }) => m.role === 'OWNER' || m.role === 'ARBITRATOR'
+      );
+      if (!hasPermission) {
+        return { success: false, error: 'Only campaign owners and arbitrators can create custom territories' };
+      }
+    }
+
+    const { error } = await supabase
+      .from('campaign_territories')
+      .insert([{
+        campaign_id: campaignId,
+        territory_name: trimmedName,
+        territory_id: null,
+        playing_card: null
+      }]);
+
+    if (error) throw error;
+
+    revalidateTag(`campaign-territories-${campaignId}`);
+    revalidateTag(`campaign-${campaignId}`);
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error creating custom campaign territory:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create custom territory'
     };
   }
 }
@@ -317,7 +373,7 @@ export async function removeTerritoryFromCampaign(params: RemoveTerritoryParams)
     // Get the gang and territory info before removing it so we can log
     const { data: territoryData, error: selectError } = await supabase
       .from('campaign_territories')
-      .select('gang_id, territory_name, custom_territory_id, campaign_id')
+      .select('gang_id, territory_name, territory_id, campaign_id')
       .eq('id', territoryId)
       .eq('campaign_id', campaignId)
       .single();
@@ -365,24 +421,18 @@ export async function removeTerritoryFromCampaign(params: RemoveTerritoryParams)
           gang_name: gangName,
           territory_name: territoryData.territory_name,
           campaign_name: campaignName,
-          is_custom: !!territoryData.custom_territory_id
+          is_custom: !territoryData.territory_id
         });
       } catch (logError) {
         console.error('Error logging territory loss:', logError);
-        // Don't fail the main operation if logging fails
       }
     }
 
-    // 🎯 TARGETED CACHE INVALIDATION
-    // Invalidate only the affected campaign's territories
     revalidateTag(`campaign-territories-${campaignId}`);
-    // Also invalidate the general campaign cache for this specific campaign
     revalidateTag(`campaign-${campaignId}`);
     
-    // Invalidate gang cache if a gang was affected
     if (territoryData?.gang_id) {
-      revalidateTag(CACHE_TAGS.COMPOSITE_GANG_FIGHTERS_LIST(territoryData.gang_id));
-      revalidatePath(`/gang/${territoryData.gang_id}`);
+      revalidateTag(CACHE_TAGS.COMPOSITE_GANG_CAMPAIGNS(territoryData.gang_id));
     }
 
     return { success: true };
@@ -401,13 +451,23 @@ export async function removeTerritoryFromCampaign(params: RemoveTerritoryParams)
 export async function updateTerritoryStatus(params: UpdateTerritoryStatusParams) {
   try {
     const supabase = await createClient();
-    const { campaignId, territoryId, ruined, default_gang_territory } = params;
-    
+    const { campaignId, territoryId, ruined, default_gang_territory, playing_card, description } = params;
+
+    // Get the gang holding this territory so we can invalidate their cache
+    const { data: territoryData } = await supabase
+      .from('campaign_territories')
+      .select('gang_id')
+      .eq('id', territoryId)
+      .eq('campaign_id', campaignId)
+      .single();
+
     const { error } = await supabase
       .from('campaign_territories')
       .update({ 
         ruined: ruined,
-        default_gang_territory: default_gang_territory
+        default_gang_territory: default_gang_territory,
+        playing_card: playing_card,
+        description: description
       })
       .eq('id', territoryId)
       .eq('campaign_id', campaignId);
@@ -419,6 +479,11 @@ export async function updateTerritoryStatus(params: UpdateTerritoryStatusParams)
     revalidateTag(`campaign-territories-${campaignId}`);
     // Also invalidate the general campaign cache for this specific campaign
     revalidateTag(`campaign-${campaignId}`);
+
+    // Invalidate gang cache to update territory display on gang page
+    if (territoryData?.gang_id) {
+      revalidateTag(CACHE_TAGS.COMPOSITE_GANG_CAMPAIGNS(territoryData.gang_id));
+    }
 
     return { success: true };
   } catch (error) {

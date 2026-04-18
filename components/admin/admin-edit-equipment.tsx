@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from 'sonner';
 import { FighterType } from "@/types/fighter";
 import { WeaponProfileInput, EquipmentGrants } from "@/types/equipment";
@@ -58,7 +60,6 @@ interface Equipment {
   equipment_name: string;
   availability: string;
   cost: number;
-  faction: string;
   variants: string;
   equipment_category: string;
   equipment_type: EquipmentType;
@@ -70,12 +71,11 @@ interface Equipment {
 }
 
 export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmentModalProps) {
+  const queryClient = useQueryClient();
   const [selectedEquipmentId, setSelectedEquipmentId] = useState('');
-  const [equipmentList, setEquipmentList] = useState<Equipment[]>([]);
   const [equipmentName, setEquipmentName] = useState('');
   const [availability, setAvailability] = useState('');
   const [cost, setCost] = useState('');
-  const [faction, setFaction] = useState('');
   const [variants, setVariants] = useState('');
   const [equipmentCategory, setEquipmentCategory] = useState('');
   const [equipmentType, setEquipmentType] = useState<EquipmentType | ''>('');
@@ -84,10 +84,7 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
   const [isConsumable, setIsConsumable] = useState(false);
   const [grantsEquipment, setGrantsEquipment] = useState<EquipmentGrants | null>(null);
   const [allEquipment, setAllEquipment] = useState<Array<{id: string, equipment_name: string, cost?: number}>>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isEquipmentDetailsLoading, setIsEquipmentDetailsLoading] = useState(false);
-  const [isWeaponsLoading, setIsWeaponsLoading] = useState(false);
-  const [isGangTypesLoading, setIsGangTypesLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [weaponProfiles, setWeaponProfiles] = useState<WeaponProfileInput[]>([{
     profile_name: '',
     range_short: '',
@@ -103,10 +100,8 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
     sort_order: 1
   }]);
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [categories, setCategories] = useState<Array<{id: string, category_name: string}>>([]);
   const [fighterTypes, setFighterTypes] = useState<FighterType[]>([]);
   const [selectedFighterTypes, setSelectedFighterTypes] = useState<string[]>([]);
-  const [weapons, setWeapons] = useState<Array<{id: string, equipment_name: string}>>([]);
   const [showAdjustedCostDialog, setShowAdjustedCostDialog] = useState(false);
   const [selectedGangType, setSelectedGangType] = useState("");
   const [adjustedCostValue, setAdjustedCostValue] = useState("");
@@ -115,7 +110,6 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
   const [selectedAdjustedCostGangOrigin, setSelectedAdjustedCostGangOrigin] = useState("");
   const [originAdjustedCostValue, setOriginAdjustedCostValue] = useState("");
   const [gangOriginAdjustedCosts, setGangOriginAdjustedCosts] = useState<GangOriginAdjustedCost[]>([]);
-  const [gangTypeOptions, setGangTypeOptions] = useState<Array<{gang_type_id: string, gang_type: string}>>([]);
   const [showAvailabilityDialog, setShowAvailabilityDialog] = useState(false);
   const [selectedAvailabilityGangType, setSelectedAvailabilityGangType] = useState("");
   const [availabilityValue, setAvailabilityValue] = useState("");
@@ -124,12 +118,10 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
   const [selectedAvailabilityGangOrigin, setSelectedAvailabilityGangOrigin] = useState("");
   const [originAvailabilityValue, setOriginAvailabilityValue] = useState("");
   const [equipmentOriginAvailabilities, setEquipmentOriginAvailabilities] = useState<EquipmentOriginAvailability[]>([]);
-  const [gangOriginList, setGangOriginList] = useState<Array<{id: string, origin_name: string, category_name: string}>>([]);
   const [showVariantAvailabilityDialog, setShowVariantAvailabilityDialog] = useState(false);
   const [selectedAvailabilityGangVariant, setSelectedAvailabilityGangVariant] = useState("");
   const [variantAvailabilityValue, setVariantAvailabilityValue] = useState("");
   const [equipmentVariantAvailabilities, setEquipmentVariantAvailabilities] = useState<EquipmentVariantAvailability[]>([]);
-  const [gangVariantList, setGangVariantList] = useState<Array<{id: string, variant: string}>>([]);
   const [fighterEffects, setFighterEffects] = useState<any[]>([]);
   const [fighterEffectCategories, setFighterEffectCategories] = useState<any[]>([]);
   const [selectedTradingPosts, setSelectedTradingPosts] = useState<string[]>([]);
@@ -137,317 +129,223 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
 
   
 
-  // Modify equipment list fetch to only happen when category is selected
+  const { data: equipmentList = [] } = useQuery<Equipment[]>({
+    queryKey: ['admin-equipment-list', categoryFilter],
+    queryFn: async () => {
+      const response = await fetch(`/api/admin/equipment?equipment_category=${encodeURIComponent(categoryFilter)}`);
+      if (!response.ok) throw new Error('Failed to fetch equipment');
+      return response.json();
+    },
+    enabled: !!categoryFilter,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: categories = [] } = useQuery<Array<{id: string, category_name: string}>>({
+    queryKey: ['admin-equipment-categories'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/equipment/categories');
+      if (!response.ok) throw new Error('Failed to fetch categories');
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: equipmentDetails, isLoading: isEquipmentDetailsLoading } = useQuery<any>({
+    queryKey: ['admin-equipment-details', selectedEquipmentId],
+    queryFn: async () => {
+      const response = await fetch(`/api/admin/equipment?id=${selectedEquipmentId}`);
+      if (!response.ok) throw new Error('Failed to fetch equipment details');
+      return response.json();
+    },
+    enabled: !!selectedEquipmentId,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  // Sync equipment details to form state
   useEffect(() => {
-    const fetchEquipment = async () => {
-      if (!categoryFilter) {
-        setEquipmentList([]);
-        return;
-      }
+    if (!selectedEquipmentId) {
+      setEquipmentName('');
+      setAvailability('');
+      setCost('');
+      setVariants('');
+      setEquipmentType('');
+      setCoreEquipment(false);
+      setIsEditable(false);
+      setIsConsumable(false);
+      setGrantsEquipment(null);
+      setWeaponProfiles([{
+        profile_name: '',
+        range_short: '',
+        range_long: '',
+        acc_short: '',
+        acc_long: '',
+        strength: '',
+        ap: '',
+        damage: '',
+        ammo: '',
+        traits: '',
+        weapon_group_id: null,
+        sort_order: 1
+      }]);
+      setGangAdjustedCosts([]);
+      setGangOriginAdjustedCosts([]);
+      setEquipmentAvailabilities([]);
+      setEquipmentOriginAvailabilities([]);
+      setEquipmentVariantAvailabilities([]);
+      setSelectedTradingPosts([]);
+      return;
+    }
 
-      try {
-        const response = await fetch(`/api/admin/equipment?equipment_category=${encodeURIComponent(categoryFilter)}`);
-        if (!response.ok) throw new Error('Failed to fetch equipment');
-        const data = await response.json();
-        setEquipmentList(data);
-      } catch (error) {
-        console.error('Error fetching equipment:', error);
-        toast.error('Failed to load equipment');
-      }
-    };
+    if (!equipmentDetails) return;
 
-    fetchEquipment();
-  }, [categoryFilter, toast]);
+    setEquipmentName(equipmentDetails.equipment_name);
+    setAvailability(equipmentDetails.availability || '');
+    setCost(equipmentDetails.cost?.toString() || '');
+    setVariants(equipmentDetails.variants || '');
+    setEquipmentCategory(equipmentDetails.equipment_category_id);
+    setEquipmentType(equipmentDetails.equipment_type);
+    setCoreEquipment(equipmentDetails.core_equipment || false);
+    setIsEditable(equipmentDetails.is_editable || false);
+    setIsConsumable(equipmentDetails.is_consumable || false);
 
-  // Get unique categories - now needs to be a separate fetch
-  useEffect(() => {
-    const fetchCategories = async () => {
-      try {
-        const response = await fetch('/api/admin/equipment/categories');
-        if (!response.ok) throw new Error('Failed to fetch categories');
-        const data = await response.json();
-        
-        // Set categories directly from the response
-        setCategories(Array.isArray(data) ? data : []);
-      } catch (error) {
-        console.error('Error fetching categories:', error);
-        toast.error('Failed to load categories');
-      }
-    };
+    if (equipmentDetails.grants_equipment) {
+      setGrantsEquipment(equipmentDetails.grants_equipment);
+    }
 
-    fetchCategories();
-  }, [toast]);
+    if (equipmentDetails.all_equipment) {
+      setAllEquipment(equipmentDetails.all_equipment);
+    }
 
-  // Fetch equipment details when selection changes
-  useEffect(() => {
-    const fetchEquipmentDetails = async () => {
-      if (!selectedEquipmentId) {
-        setEquipmentName('');
-        setAvailability('');
-        setCost('');
-        setFaction('');
-        setVariants('');
-        setEquipmentType('');
-        setCoreEquipment(false);
-        setIsEditable(false);
-        setIsConsumable(false);
-        setGrantsEquipment(null);
-        setWeaponProfiles([{
-          profile_name: '',
-          range_short: '',
-          range_long: '',
-          acc_short: '',
-          acc_long: '',
-          strength: '',
-          ap: '',
-          damage: '',
-          ammo: '',
-          traits: '',
-          weapon_group_id: null,
-          sort_order: 1
-        }]);
-        setGangAdjustedCosts([]);
-        setGangOriginAdjustedCosts([]);
-        setEquipmentAvailabilities([]);
-        setEquipmentOriginAvailabilities([]);
-        setEquipmentVariantAvailabilities([]);
-        setSelectedTradingPosts([]);
-        return;
-      }
+    if (equipmentDetails.gang_adjusted_costs) {
+      setGangAdjustedCosts(equipmentDetails.gang_adjusted_costs.map((d: any) => ({
+        gang_type: d.gang_type,
+        gang_type_id: d.gang_type_id,
+        adjusted_cost: d.adjusted_cost
+      })));
+    }
 
-      setIsEquipmentDetailsLoading(true); // ✅ Start loading
+    if (equipmentDetails.gang_origin_adjusted_costs) {
+      setGangOriginAdjustedCosts(equipmentDetails.gang_origin_adjusted_costs.map((d: any) => ({
+        origin_name: d.origin_name,
+        gang_origin_id: d.gang_origin_id,
+        adjusted_cost: d.adjusted_cost
+      })));
+    }
 
-      try {
-        const response = await fetch(`/api/admin/equipment?id=${selectedEquipmentId}`);
-        if (!response.ok) throw new Error('Failed to fetch equipment details');
-        const data = await response.json();
-        
-        console.log('Equipment data:', data);
+    if (equipmentDetails.equipment_availabilities) {
+      setEquipmentAvailabilities(equipmentDetails.equipment_availabilities.map((a: any) => ({
+        gang_type: a.gang_type,
+        gang_type_id: a.gang_type_id,
+        availability: a.availability
+      })));
+    }
 
-        // Set all form fields from fetched data
-        setEquipmentName(data.equipment_name);
-        setAvailability(data.availability || '');
-        setCost(data.cost?.toString() || '');
-        setFaction(data.faction || '');
-        setVariants(data.variants || '');
-        setEquipmentCategory(data.equipment_category_id);
-        setEquipmentType(data.equipment_type);
-        setCoreEquipment(data.core_equipment || false);
-        setIsEditable(data.is_editable || false);
-        setIsConsumable(data.is_consumable || false);
+    if (equipmentDetails.equipment_origin_availabilities) {
+      setEquipmentOriginAvailabilities(equipmentDetails.equipment_origin_availabilities.map((a: any) => ({
+        origin_name: a.origin_name,
+        gang_origin_id: a.gang_origin_id,
+        availability: a.availability
+      })));
+    }
 
-        // Set grants equipment config if it exists
-        if (data.grants_equipment) {
-          setGrantsEquipment(data.grants_equipment);
-        }
+    if (equipmentDetails.equipment_variant_availabilities) {
+      setEquipmentVariantAvailabilities(equipmentDetails.equipment_variant_availabilities.map((a: any) => ({
+        variant: a.variant,
+        gang_variant_id: a.gang_variant_id,
+        availability: a.availability
+      })));
+    }
 
-        // Set all equipment for the grants dropdown
-        if (data.all_equipment) {
-          setAllEquipment(data.all_equipment);
-        }
+    if (equipmentDetails.trading_post_associations) {
+      setSelectedTradingPosts(equipmentDetails.trading_post_associations);
+    }
 
-        // Set Gang adjusted cost if they exist
-        if (data.gang_adjusted_costs) {
-          setGangAdjustedCosts(data.gang_adjusted_costs.map((d: any) => ({
-            gang_type: d.gang_type,
-            gang_type_id: d.gang_type_id,
-            adjusted_cost: d.adjusted_cost
-          })));
-        }
+    if (equipmentDetails.trading_post_types) {
+      setTradingPostTypes(equipmentDetails.trading_post_types);
+    }
 
-        // Set Gang origin adjusted costs if they exist
-        if (data.gang_origin_adjusted_costs) {
-          setGangOriginAdjustedCosts(data.gang_origin_adjusted_costs.map((d: any) => ({
-            origin_name: d.origin_name,
-            gang_origin_id: d.gang_origin_id,
-            adjusted_cost: d.adjusted_cost
-          })));
-        }
+    if (equipmentDetails.fighter_effects) {
+      setFighterEffects(equipmentDetails.fighter_effects);
+    }
 
-        // Set equipment availabilities if they exist
-        if (data.equipment_availabilities) {
-          setEquipmentAvailabilities(data.equipment_availabilities.map((a: any) => ({
-            gang_type: a.gang_type,
-            gang_type_id: a.gang_type_id,
-            availability: a.availability
-          })));
-        }
+    if (equipmentDetails.fighter_effect_categories) {
+      setFighterEffectCategories(equipmentDetails.fighter_effect_categories);
+    }
 
-        // Set equipment origin availabilities if they exist
-        if (data.equipment_origin_availabilities) {
-          setEquipmentOriginAvailabilities(data.equipment_origin_availabilities.map((a: any) => ({
-            origin_name: a.origin_name,
-            gang_origin_id: a.gang_origin_id,
-            availability: a.availability
-          })));
-        }
+    if (equipmentDetails.all_fighter_types) {
+      setFighterTypes(equipmentDetails.all_fighter_types);
+    }
 
-        // Set equipment variant availabilities if they exist
-        if (data.equipment_variant_availabilities) {
-          setEquipmentVariantAvailabilities(data.equipment_variant_availabilities.map((a: any) => ({
-            variant: a.variant,
-            gang_variant_id: a.gang_variant_id,
-            availability: a.availability
-          })));
-        }
+    if (equipmentDetails.fighter_types_with_equipment) {
+      setSelectedFighterTypes(equipmentDetails.fighter_types_with_equipment.map((ft: any) => ft.fighter_type_id));
+    }
 
-        // Set trading post associations if they exist
-        if (data.trading_post_associations) {
-          setSelectedTradingPosts(data.trading_post_associations);
-        }
+    if (equipmentDetails.weapon_profiles && equipmentDetails.weapon_profiles.length > 0) {
+      setWeaponProfiles(equipmentDetails.weapon_profiles);
+    } else if (equipmentDetails.equipment_type === 'weapon') {
+      setWeaponProfiles([{
+        profile_name: '',
+        range_short: '',
+        range_long: '',
+        acc_short: '',
+        acc_long: '',
+        strength: '',
+        ap: '',
+        damage: '',
+        ammo: '',
+        traits: '',
+        weapon_group_id: null,
+        sort_order: 1
+      }]);
+    }
+  }, [selectedEquipmentId, equipmentDetails]);
 
-        // Set trading post types if they exist
-        if (data.trading_post_types) {
-          setTradingPostTypes(data.trading_post_types);
-        }
+  const { data: weapons = [], isLoading: isWeaponsLoading } = useQuery<Array<{id: string, equipment_name: string}>>({
+    queryKey: ['admin-weapons'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/equipment?equipment_type=weapon');
+      if (!response.ok) throw new Error('Failed to fetch weapons');
+      return response.json();
+    },
+    enabled: !!selectedEquipmentId && equipmentType === 'weapon',
+    staleTime: 5 * 60 * 1000,
+  });
 
-        // Set fighter effects if they exist
-        if (data.fighter_effects) {
-          setFighterEffects(data.fighter_effects);
-        }
+  const { data: gangTypeOptions = [], isLoading: isGangTypesLoading } = useQuery<Array<{gang_type_id: string, gang_type: string}>>({
+    queryKey: ['admin-gang-types'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/gang-types');
+      if (!response.ok) throw new Error('Failed to fetch gang types');
+      return response.json();
+    },
+    enabled: showAdjustedCostDialog || showAvailabilityDialog,
+    staleTime: 5 * 60 * 1000,
+  });
 
-        // Set fighter effect categories if they exist
-        if (data.fighter_effect_categories) {
-          setFighterEffectCategories(data.fighter_effect_categories);
-        }
+  const { data: gangOriginList = [] } = useQuery<Array<{id: string, origin_name: string, category_name: string}>>({
+    queryKey: ['admin-gang-origins'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/gang-origins');
+      if (!response.ok) throw new Error('Failed to fetch gang origins');
+      return response.json();
+    },
+    enabled: showOriginAvailabilityDialog || showOriginAdjustedCostDialog,
+    staleTime: 5 * 60 * 1000,
+  });
 
-        // Set fighter types if they exist
-        if (data.all_fighter_types) {
-          setFighterTypes(data.all_fighter_types);
-        }
+  const { data: gangVariantList = [] } = useQuery<Array<{id: string, variant: string}>>({
+    queryKey: ['admin-gang-variants'],
+    queryFn: async () => {
+      const response = await fetch('/api/gang-variant-types');
+      if (!response.ok) throw new Error('Failed to fetch gang variants');
+      return response.json();
+    },
+    enabled: showVariantAvailabilityDialog,
+    staleTime: 5 * 60 * 1000,
+  });
 
-        // Set selected fighter types if they exist
-        if (data.fighter_types_with_equipment) {
-          setSelectedFighterTypes(data.fighter_types_with_equipment.map((ft: any) => ft.fighter_type_id));
-        }
-
-        // Set weapon profiles if they exist
-        if (data.weapon_profiles && data.weapon_profiles.length > 0) {
-          console.log('Setting weapon profiles from main API:', data.weapon_profiles);
-          setWeaponProfiles(data.weapon_profiles);
-        } else if (data.equipment_type === 'weapon') {
-          console.log('No weapon profiles found, setting default');
-          setWeaponProfiles([{
-            profile_name: '',
-            range_short: '',
-            range_long: '',
-            acc_short: '',
-            acc_long: '',
-            strength: '',
-            ap: '',
-            damage: '',
-            ammo: '',
-            traits: '',
-            weapon_group_id: null,
-            sort_order: 1
-          }]);
-        }
-      } catch (error) {
-        console.error('Error in fetchEquipmentDetails:', error);
-        toast.error('Failed to load equipment details');
-      } finally {
-        setIsEquipmentDetailsLoading(false); // ✅ End loading after all operations
-      }
-    };
-
-    fetchEquipmentDetails();
-  }, [selectedEquipmentId, toast]);
-
-  // Add useEffect to fetch weapons - only when needed for weapon group selection
-  useEffect(() => {
-    const fetchWeapons = async () => {
-      // Only fetch weapons if we have a selected equipment that is a weapon type
-      if (!selectedEquipmentId || equipmentType !== 'weapon') {
-        setWeapons([]);
-        return;
-      }
-
-      setIsWeaponsLoading(true);
-      try {
-        const response = await fetch('/api/admin/equipment?equipment_type=weapon');
-        if (!response.ok) throw new Error('Failed to fetch weapons');
-        const data = await response.json();
-        setWeapons(data);
-      } catch (error) {
-        console.error('Error fetching weapons:', error);
-        toast.error('Failed to load weapons');
-      } finally {
-        setIsWeaponsLoading(false);
-      }
-    };
-
-    fetchWeapons();
-  }, [selectedEquipmentId, equipmentType, toast]);
-
-  // Add this useEffect to fetch gang types
-  useEffect(() => {
-    const fetchGangTypes = async () => {
-      if (showAdjustedCostDialog || showAvailabilityDialog) {
-        setIsGangTypesLoading(true);
-        try {
-          const response = await fetch('/api/admin/gang-types');
-          if (!response.ok) throw new Error('Failed to fetch gang types');
-          const data = await response.json();
-          setGangTypeOptions(data);
-        } catch (error) {
-          console.error('Error fetching gang types:', error);
-          toast.error('Failed to load gang types');
-        } finally {
-          setIsGangTypesLoading(false);
-        }
-      }
-    };
-
-    fetchGangTypes();
-  }, [showAdjustedCostDialog, showAvailabilityDialog, toast]);
-
-  // Add this useEffect to fetch gang origins
-  useEffect(() => {
-    const fetchGangOrigins = async () => {
-      if (showOriginAvailabilityDialog || showOriginAdjustedCostDialog) {
-        try {
-          const response = await fetch('/api/admin/gang-origins');
-          if (!response.ok) throw new Error('Failed to fetch gang origins');
-          const data = await response.json();
-          setGangOriginList(data);
-        } catch (error) {
-          console.error('Error fetching gang origins:', error);
-          toast.error('Failed to load gang origins');
-        }
-      }
-    };
-
-    fetchGangOrigins();
-  }, [showOriginAvailabilityDialog, showOriginAdjustedCostDialog, toast]);
-
-  // Fetch gang variants when variant availability dialog is opened
-  useEffect(() => {
-    const fetchGangVariants = async () => {
-      if (showVariantAvailabilityDialog) {
-        try {
-          const response = await fetch('/api/gang-variant-types');
-          if (!response.ok) throw new Error('Failed to fetch gang variants');
-          const data = await response.json();
-          setGangVariantList(data);
-        } catch (error) {
-          console.error('Error fetching gang variants:', error);
-          toast.error('Failed to load gang variants');
-        }
-      }
-    };
-
-    fetchGangVariants();
-  }, [showVariantAvailabilityDialog, toast]);
-
-  useEffect(() => {
-    setIsLoading(
-      isEquipmentDetailsLoading ||
-      isWeaponsLoading
-    );
-  }, [
-    isEquipmentDetailsLoading,
-    isWeaponsLoading
-  ]);
+  const isLoading = isEquipmentDetailsLoading || isWeaponsLoading || isSubmitting;
 
   const handleProfileChange = (index: number, field: keyof WeaponProfileInput, value: string | number | boolean) => {
     const newProfiles = [...weaponProfiles];
@@ -455,7 +353,6 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
       ...newProfiles[index],
       [field]: value
     };
-    console.log('Updated weapon profiles:', newProfiles);
     setWeaponProfiles(newProfiles);
   };
 
@@ -489,7 +386,7 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
       return;
     }
 
-    setIsLoading(true);
+    setIsSubmitting(true);
     try {
       // First get the category name
       const selectedCategory = categories.find(cat => cat.id === equipmentCategory);
@@ -508,7 +405,6 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
         equipment_name: equipmentName,
         availability,
         cost: parseInt(cost),
-        faction,
         variants,
         equipment_category: selectedCategory.category_name,
         equipment_category_id: equipmentCategory,
@@ -579,7 +475,17 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
       }
 
       toast.success("Equipment updated successfully");
-      
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-equipment-list'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-equipment-details'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-equipment-categories'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-weapons'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-gang-types'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-gang-origins'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-gang-variants'] }),
+      ]);
+
       if (onSubmit) {
         onSubmit();
       }
@@ -588,7 +494,7 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
       console.error('Error updating equipment:', error);
       toast.error('Failed to update equipment');
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -742,11 +648,10 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
               {equipmentType !== 'vehicle_upgrade' && (
                 <div className="col-span-1">
                   <label className="flex items-start space-x-2">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={coreEquipment}
-                      onChange={(e) => setCoreEquipment(e.target.checked)}
-                      className="h-4 w-4 mt-1 rounded border-border text-primary focus:ring-primary"
+                      onCheckedChange={(checked) => setCoreEquipment(checked === true)}
+                      className="mt-1"
                     />
                     <div>
                       <span className="text-sm font-medium text-muted-foreground">Exclusive to a single Fighter</span>
@@ -760,11 +665,10 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
 
               <div className="col-span-1">
                 <label className="flex items-start space-x-2">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={isEditable}
-                    onChange={(e) => setIsEditable(e.target.checked)}
-                    className="h-4 w-4 mt-1 rounded border-border text-primary focus:ring-primary"
+                    onCheckedChange={(checked) => setIsEditable(checked === true)}
+                    className="mt-1"
                   />
                   <div>
                     <span className="text-sm font-medium text-muted-foreground">Editable After Purchase</span>
@@ -777,11 +681,10 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
 
               <div className="col-span-1">
                 <label className="flex items-start space-x-2">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={isConsumable}
-                    onChange={(e) => setIsConsumable(e.target.checked)}
-                    className="h-4 w-4 mt-1 rounded border-border text-primary focus:ring-primary"
+                    onCheckedChange={(checked) => setIsConsumable(checked === true)}
+                    className="mt-1"
                   />
                   <div>
                     <span className="text-sm font-medium text-muted-foreground">Consumable</span>
@@ -1659,7 +1562,6 @@ export function AdminEditEquipmentModal({ onClose, onSubmit }: AdminEditEquipmen
                       // No toast needed as effects show directly in UI
                     }}
                     onChange={(effects) => {
-                      console.log('Fighter effects changed:', effects);
                       setFighterEffects(effects);
                     }}
                   />

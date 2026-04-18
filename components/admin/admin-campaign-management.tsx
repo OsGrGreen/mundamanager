@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Combobox } from "@/components/ui/combobox";
 import { toast } from 'sonner';
 import { HiX } from "react-icons/hi";
 import Modal from '@/components/ui/modal';
@@ -25,6 +27,7 @@ interface Territory {
   id: string;
   territory_name: string;
   campaign_type_id?: string | null;
+  playing_card?: string | null;
 }
 
 interface CampaignTriumph {
@@ -41,22 +44,64 @@ interface AdminCampaignManagementModalProps {
   onSubmit?: () => void;
 }
 
+const CARD_RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const CARD_SUITS = ['♦️', '♠️', '♥️', '♣️'];
+const NONE_CARD_VALUE = '__none__';
+const territoryCardOptions = [
+  { value: NONE_CARD_VALUE, label: 'None' },
+  ...CARD_SUITS.flatMap((suit) =>
+    CARD_RANKS.map((rank) => ({
+      value: `${rank}${suit}`,
+      label: `${rank}${suit}`
+    }))
+  )
+];
+
 export function AdminCampaignManagementModal({ 
   onClose, 
   onSubmit 
 }: AdminCampaignManagementModalProps) {
   
   
+  const queryClient = useQueryClient();
+
   // Category selection
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>('campaign-types');
-  
-  // Data state
-  const [campaignTypes, setCampaignTypes] = useState<CampaignType[]>([]);
-  const [territories, setTerritories] = useState<Territory[]>([]);
-  const [triumphs, setTriumphs] = useState<CampaignTriumph[]>([]);
-  
-  // Loading states
-  const [isLoading, setIsLoading] = useState(false);
+
+  // Submission loading state
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const { data: campaignTypes = [], isLoading: isLoadingCampaignTypes } = useQuery<CampaignType[]>({
+    queryKey: ['admin-campaign-types'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/campaign-types');
+      if (!response.ok) throw new Error('Failed to fetch campaign types');
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: territories = [], isLoading: isLoadingTerritories } = useQuery<Territory[]>({
+    queryKey: ['admin-territories'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/territories');
+      if (!response.ok) throw new Error('Failed to fetch territories');
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: triumphs = [], isLoading: isLoadingTriumphs } = useQuery<CampaignTriumph[]>({
+    queryKey: ['admin-campaign-triumphs'],
+    queryFn: async () => {
+      const response = await fetch('/api/admin/campaign-triumphs');
+      if (!response.ok) throw new Error('Failed to fetch triumphs');
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const isLoading = isLoadingCampaignTypes || isLoadingTerritories || isLoadingTriumphs || isSubmitting;
   
   // Campaign Types form state
   const [selectedCampaignTypeId, setSelectedCampaignTypeId] = useState('');
@@ -76,6 +121,7 @@ export function AdminCampaignManagementModal({
   const [selectedTerritoryId, setSelectedTerritoryId] = useState('');
   const [territoryName, setTerritoryName] = useState('');
   const [territoryCampaignTypeId, setTerritoryCampaignTypeId] = useState('');
+  const [territoryCardValue, setTerritoryCardValue] = useState('');
   const [isCreateModeTerritory, setIsCreateModeTerritory] = useState(false);
   
   // Triumphs form state
@@ -85,12 +131,7 @@ export function AdminCampaignManagementModal({
   const [triumphCampaignTypeId, setTriumphCampaignTypeId] = useState('');
   const [isCreateModeTriumph, setIsCreateModeTriumph] = useState(false);
 
-  // Fetch data on mount
-  useEffect(() => {
-    fetchAllData();
-  }, []);
-
-  const handleCategoryChange = useCallback((category: CategoryType) => {
+  const handleCategoryChange = (category: CategoryType) => {
     setSelectedCategory(category);
     // Reset all form states
     setSelectedCampaignTypeId('');
@@ -99,23 +140,19 @@ export function AdminCampaignManagementModal({
     setIsCreateModeCampaignType(false);
     setRelatedTerritories([]);
     setRelatedTriumphs([]);
-    
+
     setSelectedTerritoryId('');
     setTerritoryName('');
     setTerritoryCampaignTypeId('');
+    setTerritoryCardValue('');
     setIsCreateModeTerritory(false);
-    
+
     setSelectedTriumphId('');
     setTriumphName('');
     setTriumphCriteria('');
     setTriumphCampaignTypeId('');
     setIsCreateModeTriumph(false);
-  }, []);
-
-  // Reset form when category changes
-  useEffect(() => {
-    handleCategoryChange(selectedCategory);
-  }, [selectedCategory, handleCategoryChange]);
+  };
 
   // Load related territories and triumphs when campaign type is selected
   useEffect(() => {
@@ -130,54 +167,11 @@ export function AdminCampaignManagementModal({
     }
   }, [selectedCampaignTypeId, territories, triumphs, isCreateModeCampaignType]);
 
-  const fetchAllData = async () => {
-    setIsLoading(true);
-    try {
-      await Promise.all([
-        fetchCampaignTypes(),
-        fetchTerritories(),
-        fetchTriumphs()
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchCampaignTypes = async () => {
-    try {
-      const response = await fetch('/api/admin/campaign-types');
-      if (!response.ok) throw new Error('Failed to fetch campaign types');
-      const data = await response.json();
-      setCampaignTypes(data);
-    } catch (error) {
-      console.error('Error fetching campaign types:', error);
-      toast.error('Failed to load campaign types');
-    }
-  };
-
-  const fetchTerritories = async () => {
-    try {
-      const response = await fetch('/api/admin/territories');
-      if (!response.ok) throw new Error('Failed to fetch territories');
-      const data = await response.json();
-      setTerritories(data);
-    } catch (error) {
-      console.error('Error fetching territories:', error);
-      toast.error('Failed to load territories');
-    }
-  };
-
-  const fetchTriumphs = async () => {
-    try {
-      const response = await fetch('/api/admin/campaign-triumphs');
-      if (!response.ok) throw new Error('Failed to fetch triumphs');
-      const data = await response.json();
-      setTriumphs(data);
-    } catch (error) {
-      console.error('Error fetching triumphs:', error);
-      toast.error('Failed to load triumphs');
-    }
-  };
+  const invalidateAllData = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['admin-campaign-types'] }),
+    queryClient.invalidateQueries({ queryKey: ['admin-territories'] }),
+    queryClient.invalidateQueries({ queryKey: ['admin-campaign-triumphs'] }),
+  ]);
 
   // Campaign Types handlers
   const handleCampaignTypeSelect = (id: string) => {
@@ -205,7 +199,7 @@ export function AdminCampaignManagementModal({
       return;
     }
 
-    setIsLoading(true);
+    setIsSubmitting(true);
     try {
       let url = '/api/admin/campaign-types';
       let method: string;
@@ -320,7 +314,7 @@ export function AdminCampaignManagementModal({
 
       toast.success(`Campaign type ${operation === OperationType.POST ? 'created' : 'updated'} successfully`);
 
-      await fetchAllData();
+      await invalidateAllData();
       
       // Reset form
       setSelectedCampaignTypeId('');
@@ -337,7 +331,7 @@ export function AdminCampaignManagementModal({
       console.error(`Error executing ${operation} operation:`, error);
       toast.error(error instanceof Error ? error.message : `Failed to ${operation === OperationType.POST ? 'create' : 'update'} campaign type`);
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -349,6 +343,7 @@ export function AdminCampaignManagementModal({
     if (selected) {
       setTerritoryName(selected.territory_name);
       setTerritoryCampaignTypeId(selected.campaign_type_id || '');
+      setTerritoryCardValue(selected.playing_card || '');
     }
   };
 
@@ -356,6 +351,7 @@ export function AdminCampaignManagementModal({
     setSelectedTerritoryId('');
     setTerritoryName('');
     setTerritoryCampaignTypeId('');
+    setTerritoryCardValue('');
     setIsCreateModeTerritory(true);
   };
 
@@ -365,7 +361,7 @@ export function AdminCampaignManagementModal({
       return;
     }
 
-    setIsLoading(true);
+    setIsSubmitting(true);
     try {
       let url = '/api/admin/territories';
       let method: string;
@@ -376,7 +372,8 @@ export function AdminCampaignManagementModal({
           method = 'POST';
           body = JSON.stringify({
             territory_name: territoryName.trim(),
-            campaign_type_id: territoryCampaignTypeId || null
+            campaign_type_id: territoryCampaignTypeId || null,
+            playing_card: territoryCardValue.trim() || null
           });
           break;
         case OperationType.UPDATE:
@@ -384,7 +381,8 @@ export function AdminCampaignManagementModal({
           body = JSON.stringify({
             id: selectedTerritoryId,
             territory_name: territoryName.trim(),
-            campaign_type_id: territoryCampaignTypeId || null
+            campaign_type_id: territoryCampaignTypeId || null,
+            playing_card: territoryCardValue.trim() || null
           });
           break;
         default:
@@ -405,12 +403,13 @@ export function AdminCampaignManagementModal({
 
       toast.success(`Territory ${operation === OperationType.POST ? 'created' : 'updated'} successfully`);
 
-      await fetchAllData();
+      await invalidateAllData();
       
       // Reset form
       setSelectedTerritoryId('');
       setTerritoryName('');
       setTerritoryCampaignTypeId('');
+      setTerritoryCardValue('');
       setIsCreateModeTerritory(false);
 
       if (onSubmit) {
@@ -420,7 +419,7 @@ export function AdminCampaignManagementModal({
       console.error(`Error executing ${operation} operation:`, error);
       toast.error(error instanceof Error ? error.message : `Failed to ${operation === OperationType.POST ? 'create' : 'update'} territory`);
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -451,7 +450,7 @@ export function AdminCampaignManagementModal({
       return;
     }
 
-    setIsLoading(true);
+    setIsSubmitting(true);
     try {
       let url = '/api/admin/campaign-triumphs';
       let method: string;
@@ -493,7 +492,7 @@ export function AdminCampaignManagementModal({
 
       toast.success(`Triumph ${operation === OperationType.POST ? 'created' : 'updated'} successfully`);
 
-      await fetchAllData();
+      await invalidateAllData();
       
       // Reset form
       setSelectedTriumphId('');
@@ -509,7 +508,7 @@ export function AdminCampaignManagementModal({
       console.error(`Error executing ${operation} operation:`, error);
       toast.error(error instanceof Error ? error.message : `Failed to ${operation === OperationType.POST ? 'create' : 'update'} triumph`);
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -575,6 +574,41 @@ export function AdminCampaignManagementModal({
   };
 
   const activeForm = getActiveFormState();
+  const territorySelectOptions = territories.map((territory) => {
+    const playingCardValue = territory.playing_card?.trim();
+    const hasPlayingCardValue = Boolean(playingCardValue);
+    const campaignTypeName = campaignTypes.find(
+      (type) => type.id === territory.campaign_type_id
+    )?.campaign_type_name;
+    const hasCampaignTypeName = Boolean(campaignTypeName);
+    const territoryMeta = hasCampaignTypeName ? campaignTypeName : '';
+
+    return {
+      value: territory.id,
+      label: (
+        <span className="inline-flex items-baseline gap-1">
+          <span className="text-gray-400 inline-block w-8 text-center mr-1">
+            {hasPlayingCardValue ? playingCardValue : '\u00A0'}
+          </span>
+          <span>{territory.territory_name}</span>
+          {hasCampaignTypeName && (
+            <span className="text-xs text-muted-foreground">
+              {`• ${campaignTypeName}`}
+            </span>
+          )}
+        </span>
+      ),
+      displayValue: [
+        hasPlayingCardValue ? playingCardValue : null,
+        territory.territory_name,
+        territoryMeta || null
+      ].filter(Boolean).join(' ')
+    };
+  });
+  const campaignTypeSelectOptions = campaignTypes.map((type) => ({
+    value: type.id,
+    label: type.campaign_type_name
+  }));
 
   return (
     <div
@@ -770,19 +804,14 @@ export function AdminCampaignManagementModal({
                       Create New
                     </Button>
                   </div>
-                  <select
+                  <Combobox
                     value={selectedTerritoryId}
-                    onChange={(e) => handleTerritorySelect(e.target.value)}
-                    className="w-full p-2 border rounded-md"
+                    onValueChange={handleTerritorySelect}
+                    options={territorySelectOptions}
+                    placeholder="Select a territory to edit"
+                    clearable
                     disabled={isLoading}
-                  >
-                    <option value="">Select a territory to edit</option>
-                    {territories.map((territory) => (
-                      <option key={territory.id} value={territory.id}>
-                        {territory.territory_name}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   {isCreateModeTerritory && (
                     <p className="text-xs text-amber-600 mt-1">
                       Creating new territory. Select from dropdown to cancel and edit existing.
@@ -808,19 +837,31 @@ export function AdminCampaignManagementModal({
                   <label className="block text-sm font-medium text-muted-foreground mb-1">
                     Campaign Type
                   </label>
-                  <select
+                  <Combobox
                     value={territoryCampaignTypeId}
-                    onChange={(e) => setTerritoryCampaignTypeId(e.target.value)}
-                    className="w-full p-2 border rounded-md"
+                    onValueChange={setTerritoryCampaignTypeId}
+                    options={[
+                      { value: '', label: 'None (unassigned)' },
+                      ...campaignTypeSelectOptions
+                    ]}
+                    placeholder="None (unassigned)"
                     disabled={!isCreateModeTerritory && !selectedTerritoryId}
-                  >
-                    <option value="">None (unassigned)</option>
-                    {campaignTypes.map((type) => (
-                      <option key={type.id} value={type.id}>
-                        {type.campaign_type_name}
-                      </option>
-                    ))}
-                  </select>
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-muted-foreground mb-1">
+                    Playing Card
+                  </label>
+                  <Combobox
+                    value={territoryCardValue || NONE_CARD_VALUE}
+                    onValueChange={(value) => setTerritoryCardValue(value === NONE_CARD_VALUE ? '' : value)}
+                    options={territoryCardOptions}
+                    placeholder="Select or enter a card value"
+                    allowCustom
+                    clearable
+                    disabled={!isCreateModeTerritory && !selectedTerritoryId}
+                  />
                 </div>
               </>
             )}
